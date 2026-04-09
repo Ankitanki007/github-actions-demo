@@ -1,0 +1,72 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'    # Every Monday at 6am — weekly scan
+  workflow_dispatch:
+
+jobs:
+  trivy-fs-scan:
+    name: Trivy Filesystem Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Scan the source code and dependencies for vulnerabilities
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'          # Scan filesystem
+          scan-ref: '.'            # Scan current directory
+          exit-code: '0'           # 0 = don't fail on findings (just report)
+          severity: 'HIGH,CRITICAL'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      # Upload results to GitHub Security tab
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  trivy-image-scan:
+    name: Trivy Docker Image Scan
+    runs-on: ubuntu-latest
+    needs: []    # Run independently
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Build image locally for scanning (don't need to push first)
+      - name: Build Docker image for scanning
+        run: docker build -t scan-target:test .
+
+      # Scan the built image
+      - name: Trivy image vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'scan-target:test'
+          exit-code: '1'            # 1 = FAIL pipeline if CRITICAL found
+          severity: 'CRITICAL'      # Only fail on CRITICAL (not HIGH)
+          format: 'table'
+          ignore-unfixed: true      # Skip CVEs with no available fix
+
+      # Also generate detailed JSON report
+      - name: Generate detailed security report
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'scan-target:test'
+          format: 'json'
+          output: 'trivy-image-report.json'
+          exit-code: '0'
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-image-report
+          path: trivy-image-report.json
