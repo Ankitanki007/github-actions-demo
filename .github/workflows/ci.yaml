@@ -11,6 +11,9 @@ jobs:
     name: Run Tests and Lint
     runs-on: ubuntu-latest
 
+    env:
+      PYTHONPATH: .
+
     # Test on multiple Python versions simultaneously
     strategy:
       matrix:
