@@ -1,0 +1,70 @@
+name: Docker Build and Push
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo
+
+jobs:
+  docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    # Only run if CI tests passed first
+    needs: []    # Remove this line and use workflow_run in production
+
+    # This job outputs the image tag so other jobs can use it
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+      image-digest: ${{ steps.build-push.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Sets up QEMU for multi-platform builds (amd64 + arm64)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # Docker Buildx enables advanced features like multi-platform builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login to Docker Hub using our secrets
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Generate smart image tags automatically
+      - name: Extract metadata for Docker tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-            # sha-abc1234 (unique per commit)
+            type=ref,event=branch           # branch-name
+            type=semver,pattern={{version}} # v1.2.3 if git tag pushed
+
+      # Build and push in one step
+      - name: Build and push Docker image
+        id: build-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64   # Build for both architectures
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha       # Use GitHub Actions cache for faster builds
+          cache-to: type=gha,mode=max
+
+      # Print the image digest for verification
+      - name: Print image digest
+        run: echo "Image pushed with digest ${{ steps.build-push.outputs.digest }}"
