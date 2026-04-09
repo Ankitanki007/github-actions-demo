@@ -1,0 +1,69 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests and Lint
+    runs-on: ubuntu-latest
+
+    # Test on multiple Python versions simultaneously
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+      fail-fast: false    # Don't cancel 3.12 if 3.11 fails
+
+    steps:
+      # Step 1: Download the code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Install the Python version we want
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'    # Cache pip downloads — speeds up future runs
+
+      # Step 3: Install all dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 4: Run linting — check code style
+      - name: Run flake8 linting
+        run: |
+          flake8 app/ tests/ --statistics --count
+          echo "Linting passed!"
+
+      # Step 5: Run all tests with coverage
+      - name: Run pytest with coverage
+        run: |
+          pytest tests/ \
+            --cov=app \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=80 \
+            -v
+        # --cov-fail-under=80 means pipeline FAILS if coverage drops below 80%
+
+      # Step 6: Save coverage report as downloadable artifact
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()    # Upload even if tests failed
+        with:
+          name: coverage-report-py${{ matrix.python-version }}
+          path: coverage.xml
+          retention-days: 7
+
+      # Step 7: Add coverage comment to Pull Request
+      - name: Coverage comment on PR
+        if: github.event_name == 'pull_request'
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
