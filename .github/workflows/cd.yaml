@@ -1,0 +1,69 @@
+name: CD — Deploy to EC2
+
+on:
+  # Trigger ONLY after CI workflow succeeds on main
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:    # Also allow manual trigger
+
+jobs:
+  deploy:
+    name: Deploy to Production EC2
+    runs-on: ubuntu-latest
+
+    # Only deploy if CI workflow actually succeeded (not failed)
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    # Use GitHub Environments for approval gates (set up in repo Settings)
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # SSH into EC2 and run deployment commands
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            # Login to Docker Hub to pull the new image
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" | \
+              docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+            # Pull the latest image
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo:latest
+
+            # Stop and remove old container if running
+            docker stop my-app 2>/dev/null || true
+            docker rm my-app 2>/dev/null || true
+
+            # Start new container
+            docker run -d \
+              --name my-app \
+              --restart unless-stopped \
+              -p 5000:5000 \
+              -e APP_VERSION=${{ github.sha }} \
+              ${{ secrets.DOCKERHUB_USERNAME }}/github-actions-demo:latest
+
+            # Health check — wait for app to be ready
+            sleep 10
+            curl -f http://localhost:5000/health || \
+              (docker logs my-app && exit 1)
+
+            echo "Deployment successful! Version: ${{ github.sha }}"
+
+            # Clean up old images to save disk space
+            docker image prune -f
+
+      # Verify deployment from GitHub's perspective
+      - name: Verify deployment
+        run: |
+          sleep 5
+          curl -f http://${{ secrets.EC2_HOST }}:5000/health
+          echo "Health check passed — deployment successful"
